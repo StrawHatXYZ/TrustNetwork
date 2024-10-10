@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'home.dart';
 
 class PhoneLoginScreen extends StatefulWidget {
@@ -15,7 +16,9 @@ class PhoneLoginScreen extends StatefulWidget {
 class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
   final TextEditingController _phoneController = TextEditingController(text: '+91 ');
   final TextEditingController _otpController = TextEditingController();
+  final TextEditingController _nameController = TextEditingController();
   bool _otpSent = false;
+  bool _phoneVerified = false;
   String _verificationId = '';
   final FirebaseAuth _auth = FirebaseAuth.instance;
   bool _initialized = false;
@@ -31,19 +34,10 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
   void initState() {
     super.initState();
     initializeFirebase();
-    checkCurrentUser();
+    // Remove the checkCurrentUser() call from here
   }
 
-  void checkCurrentUser() {
-    FirebaseAuth.instance.authStateChanges().listen((User? user) {
-      if (user != null) {
-        // User is signed in, navigate to home page
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const HomePage()),
-        );
-      }
-    });
-  }
+  // Remove or comment out the checkCurrentUser method entirely
 
   void initializeFirebase() async {
     try {
@@ -80,14 +74,18 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
               const SizedBox(height: 48),
               _buildTitle(),
               const SizedBox(height: 24),
-              _buildPhoneInput(),
-              if (_otpSent) ...[
+              if (!_otpSent) _buildPhoneInput(),
+              if (_otpSent && !_phoneVerified) ...[
                 const SizedBox(height: 16),
                 _buildOtpInput(),
               ],
+              if (_phoneVerified) ...[
+                const SizedBox(height: 16),
+                _buildNameInput(),
+              ],
               const SizedBox(height: 24),
               _buildActionButton(),
-              if (_otpSent) _buildResendButton(),
+              if (_otpSent && !_phoneVerified) _buildResendButton(),
               const Spacer(),
             ],
           ),
@@ -183,6 +181,27 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
     );
   }
 
+  Widget _buildNameInput() {
+    return TextFormField(
+      controller: _nameController,
+      decoration: InputDecoration(
+        labelText: 'Your Name',
+        hintText: 'Enter your name',
+        prefixIcon: Icon(Icons.person, color: primaryColor),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: primaryColor),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: primaryColor, width: 2),
+        ),
+        filled: true,
+        fillColor: whiteColor,
+      ),
+    );
+  }
+
   Widget _buildActionButton() {
     return ElevatedButton(
       onPressed: _handleActionButtonPress,
@@ -194,10 +213,16 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
         ),
       ),
       child: Text(
-        _otpSent ? 'Verify OTP' : 'Send OTP',
+        _getActionButtonText(),
         style: TextStyle(fontSize: 18, color: whiteColor),
       ),
     );
+  }
+
+  String _getActionButtonText() {
+    if (!_otpSent) return 'Send OTP';
+    if (!_phoneVerified) return 'Verify OTP';
+    return 'Complete Registration';
   }
 
   Widget _buildResendButton() {
@@ -215,8 +240,10 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
       } else {
         _showOtpCooldownMessage();
       }
-    } else {
+    } else if (!_phoneVerified) {
       _signInWithPhoneNumber();
+    } else {
+      _saveUserName();
     }
   }
 
@@ -280,44 +307,70 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
         verificationId: _verificationId,
         smsCode: _otpController.text,
       );
-      final UserCredential userCredential = await _auth.signInWithCredential(credential);
+      await _auth.signInWithCredential(credential);
       
-      // Store user's phone number in Firestore
-      await _storeUserPhoneNumber(userCredential.user!.uid, _phoneController.text);
+      setState(() {
+        _phoneVerified = true;
+      });
       
-      // The authStateChanges listener will handle navigation
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Phone verified. Please enter your name.')),
+      );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to sign in: ${e.toString()}')),
+        SnackBar(content: Text('Failed to verify OTP: ${e.toString()}')),
       );
     }
   }
 
-  Future<void> _storeUserPhoneNumber(String userId, String phoneNumber) async {
-    print('Storing user phone number: $phoneNumber');
+  Future<void> _saveUserName() async {
+    if (_nameController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter your name')),
+      );
+      return;
+    }
+
+    try {
+      final user = _auth.currentUser;
+      if (user != null) {
+        await _storeUserData(user.uid, _phoneController.text, _nameController.text);
+        await _storeUserDataLocally(_phoneController.text, _nameController.text);
+        // Navigate to the home page only after storing user data
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const HomePage()),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save name: ${e.toString()}')),
+      );
+    }
+  }
+
+  Future<void> _storeUserData(String userId, String phoneNumber, String name) async {
     try {
       await FirebaseFirestore.instance.collection('registered_users').doc(userId).set({
         'phoneNumber': phoneNumber,
+        'name': name,
         'createdAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      print('User phone number stored successfully');
+      print('User data stored successfully in Firestore');
     } catch (e) {
-      print('Error storing user phone number: $e');
-      if (e is FirebaseException && e.code == 'permission-denied') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Permission denied. Please check your Firestore security rules.'),
-            duration: Duration(seconds: 5),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('An error occurred while storing user data.'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
+      print('Error storing user data in Firestore: $e');
+      throw e;
+    }
+  }
+
+  Future<void> _storeUserDataLocally(String phoneNumber, String name) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user_phone', phoneNumber);
+      await prefs.setString('user_name', name);
+      print('User data stored successfully in local storage');
+    } catch (e) {
+      print('Error storing user data in local storage: $e');
+      throw e;
     }
   }
 }

@@ -1,3 +1,4 @@
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:trust/login.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -42,6 +43,19 @@ class _HomePageState extends State<HomePage> {
         contacts = allContacts;
       });
       print("Contacts in state: ${contacts.length}");
+      
+      // Print contact details including organization information
+      for (var contact in contacts) {
+        String company = 'N/A';
+        String title = 'N/A';
+        
+        if (contact.organizations.isNotEmpty) {
+          company = contact.organizations.first.company ?? 'N/A';
+          title = contact.organizations.first.title ?? 'N/A';
+        }
+        
+        print("Name: ${contact.displayName}, Phone: ${contact.phones.firstOrNull?.number ?? 'N/A'}, Company: $company, Title: $title");
+      }
     } catch (e) {
       print('Error loading contacts: $e');
       // Handle error (e.g., show a snackbar)
@@ -258,32 +272,28 @@ class _HomePageState extends State<HomePage> {
             Row(
               children: [
                 CircleAvatar(
-                  backgroundImage: NetworkImage(post['avatar_url']),
+                  backgroundImage: post['avatar_url'] != null 
+                    ? NetworkImage(post['avatar_url'] as String) 
+                    : null,
+                  child: post['avatar_url'] == null 
+                    ? Text((post['username'] as String? ?? '?')[0], style: const TextStyle(fontSize: 20))
+                    : null,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: FutureBuilder<String?>(
-                    future: ContactService.getNameByPhoneNumber(post['phone']),
+                    future: ContactService.getNameByPhoneNumber(post['phone'] as String? ?? ''),
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return const CircularProgressIndicator();
                       }
-                      final displayName = snapshot.data ?? post['username'];
-                      return Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              displayName,
-                              style: const TextStyle(fontWeight: FontWeight.bold),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            post['phone'] ?? 'No phone number',
-                            style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                          ),
-                        ],
+                      final displayName = snapshot.data ?? post['username'] as String? ?? 'Unknown';
+                      return Flexible(
+                        child: Text(
+                          displayName,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       );
                     },
                   ),
@@ -291,7 +301,7 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
             const SizedBox(height: 8),
-            Text(post['content']),
+            Text(post['content'] as String? ?? ''),
             const SizedBox(height: 8),
             Text(
               _formatTimestamp(post['timestamp']),
@@ -537,12 +547,42 @@ class _HomePageState extends State<HomePage> {
     }
 
     try {
-      final initials = username.split(' ').map((word) => word[0]).take(2).join('').toUpperCase();
       
+        //get user name from shared preferences
+      final prefs = await SharedPreferences.getInstance();
+      String? userName = prefs.getString('user_name');
+      String? userPhone = prefs.getString('user_phone');
+
+      // If userName or userPhone is null, fetch from Firestore
+      if (userName == null || userPhone == null) {
+        final userDoc = await FirebaseFirestore.instance
+            .collection('registered_users')
+            .doc(user.uid)
+            .get();
+
+        if (userDoc.exists) {
+          final userData = userDoc.data();
+          userName = userData?['name'] ?? 'Unknown';
+          userPhone = userData?['phoneNumber'] ?? '';
+
+          // Save to SharedPreferences for future use
+          await prefs.setString('user_name', userName!);
+          await prefs.setString('user_phone', userPhone!);
+        }
+      }
+
+      print('User Name: $userName');
+      print('User Phone: $userPhone');
+
+      // Get user initials from user name
+      final initials = userName != null && userName.isNotEmpty
+          ? userName.trim().split(' ').map((name) => name[0]).join('').toUpperCase()
+          : '';
+    
       await FirebaseFirestore.instance.collection('posts').add({
-        'username': username,
+        'username': userName,
         'content': content,
-        'phone': user.phoneNumber,
+        'phone': userPhone,
         'user_id': user.uid,
         'avatar_url': 'https://ui-avatars.com/api/?background=0D8ABC&color=fff&name=$initials&rounded=true',
         'timestamp': FieldValue.serverTimestamp(),
