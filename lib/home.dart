@@ -35,6 +35,7 @@ class _HomePageState extends State<HomePage> {
     _loadPosts();  // Add this line
   }
 
+//load the contacts from the phone
   Future<void> _loadContacts() async {
     try {
       final allContacts = await ContactService.getContacts();
