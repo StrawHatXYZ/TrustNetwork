@@ -24,6 +24,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
   bool _initialized = false;
   bool _error = false;
   DateTime? _lastOtpSentTime;
+  bool _nameExists = false;
 
   // Add these color constants at the beginning of the class
   final Color primaryColor = const Color(0xFFF4845F);
@@ -222,6 +223,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
   String _getActionButtonText() {
     if (!_otpSent) return 'Send OTP';
     if (!_phoneVerified) return 'Verify OTP';
+    if (_nameExists) return 'Continue';
     return 'Complete Registration';
   }
 
@@ -309,13 +311,33 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
       );
       await _auth.signInWithCredential(credential);
       
+      // Check if user's name already exists
+      final user = _auth.currentUser;
+      if (user != null) {
+        final userData = await FirebaseFirestore.instance
+            .collection('registered_users')
+            .doc(user.uid)
+            .get();
+        
+        if (userData.exists && userData.data()?['name'] != null) {
+          setState(() {
+            _nameExists = true;
+            _nameController.text = userData.data()!['name'];
+          });
+        }
+      }
+      
       setState(() {
         _phoneVerified = true;
       });
       
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Phone verified. Please enter your name.')),
-      );
+      if (_nameExists) {
+        _saveUserName();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Phone verified. Please enter your name.')),
+        );
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to verify OTP: ${e.toString()}')),
@@ -324,7 +346,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
   }
 
   Future<void> _saveUserName() async {
-    if (_nameController.text.isEmpty) {
+    if (!_nameExists && _nameController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please enter your name')),
       );

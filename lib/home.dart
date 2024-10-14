@@ -1,12 +1,14 @@
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:trust/login.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:trust/profile_page.dart';
 import 'contacts_service.dart';
 import 'friend_service.dart';
 import 'contacts.dart';
+import 'chat_room_screen.dart';
+import 'chat_list_screen.dart'; // Add this import
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -151,6 +153,7 @@ class _HomePageState extends State<HomePage> {
         children: [
           _buildHomePage(context, 'John Doe'),
           const ContactsPage(),
+          ChatListScreen(), // Add this line
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
@@ -164,7 +167,7 @@ class _HomePageState extends State<HomePage> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(icon: Icon(Icons.people), label: 'Contacts'),
-          BottomNavigationBarItem(icon: Icon(Icons.chat), label: 'Chats'), // Change this item
+          BottomNavigationBarItem(icon: Icon(Icons.chat), label: 'Chats'),
         ],
         selectedItemColor: const Color(0xFFF4845F),
         unselectedItemColor: Colors.grey,
@@ -176,35 +179,45 @@ class _HomePageState extends State<HomePage> {
     return Row(
       children: [
         Expanded(
-          child: TextField(
-            controller: _searchController,
-            decoration: InputDecoration(
-              hintText: 'Search...',
-              prefixIcon: const Icon(Icons.search),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(20),
-                borderSide: BorderSide.none,
-              ),
-              filled: true,
-              fillColor: Colors.grey[200],
-              contentPadding: const EdgeInsets.symmetric(vertical: 8),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.grey[200],
+              borderRadius: BorderRadius.circular(20),
             ),
-            onChanged: (value) {
-              // Implement search functionality here
-              // You can filter posts or contacts based on the search value
-            },
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search...',
+                prefixIcon: const Icon(Icons.search, color: Color(0xFFF4845F)),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onChanged: (value) {
+                // Implement search functionality here
+                // _performSearch(value);
+              },
+            ),
           ),
         ),
         const SizedBox(width: 8),
-        IconButton(
-          icon: const Icon(Icons.logout, color: Color(0xFFF4845F)),
-          onPressed: () async {
-            //signout
-            await FirebaseAuth.instance.signOut();
-            Navigator.of(context).pushReplacement(
-              MaterialPageRoute(builder: (context) => PhoneLoginScreen()),
+        GestureDetector(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const ProfilePage()),
             );
           },
+          child: Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: const Color(0xFFF4845F), width: 2),
+            ),
+            child: CircleAvatar(
+              radius: 20,
+              backgroundColor: Colors.white,
+              backgroundImage: NetworkImage('https://ui-avatars.com/api/?background=0D8ABC&color=fff&name=${Uri.encodeComponent("John Doe")}&rounded=true'),
+            ),
+          ),
         ),
       ],
     );
@@ -263,6 +276,14 @@ class _HomePageState extends State<HomePage> {
 
   // Add this new method to build post cards
   Widget _buildPostCard(Map<String, dynamic> post) {
+    bool containsBlockchain = post['content'].toString().toLowerCase().contains('blockchain');
+    List<Contact> blockchainContacts = [];
+
+    if (containsBlockchain) {
+      blockchainContacts = contacts.where((contact) => 
+        contact.displayName.toLowerCase().contains('blockchain')).toList();
+    }
+
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Padding(
@@ -308,10 +329,169 @@ class _HomePageState extends State<HomePage> {
               _formatTimestamp(post['timestamp']),
               style: const TextStyle(color: Colors.grey),
             ),
+            if (containsBlockchain && blockchainContacts.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Would you like to connect with blockchain contacts?',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Row(
+                children: [
+                  ElevatedButton(
+                    onPressed: () {
+                      // Pass the post author's ID to _showBlockchainContacts
+                      _showBlockchainContacts(blockchainContacts, post['user_id'] as String);
+                    },
+                    child: Text('Yes'),
+                  ),
+                  SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Maybe next time!')),
+                      );
+                    },
+                    child: Text('No'),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
     );
+  }
+
+  void _showBlockchainContacts(List<Contact> blockchainContacts, String postAuthorId) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Blockchain Contacts'),
+          content: SingleChildScrollView(
+            child: ListBody(
+              children: blockchainContacts.map((contact) => 
+                ListTile(
+                  title: Text(contact.displayName),
+                  subtitle: Text(contact.phones.isNotEmpty ? contact.phones.first.number : 'No phone number'),
+                  onTap: () {
+                    // Handle contact selection
+                    Navigator.of(context).pop();
+                    _createChatRoom(contact, postAuthorId);
+                  },
+                )
+              ).toList(),
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: Text('Close'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _createChatRoom(Contact contact, String postAuthorId) async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) {
+        throw Exception('No user logged in');
+      }
+
+      // Get the contact's user ID
+      final contactSnapshot = await FirebaseFirestore.instance
+          .collection('registered_users')
+          .get();
+
+      final contactDoc = contactSnapshot.docs.firstWhere(
+        (doc) {
+          final storedPhone = doc['phoneNumber'];
+          return contact.phones.any((phone) => arePhoneNumbersEqual(phone.number, storedPhone));
+        },
+        orElse: () => throw Exception('Contact not found in registered users'),
+      );
+
+      final contactUserId = contactDoc.id;
+
+      // Check if a chat room already exists with these participants
+      final existingRoomQuery = await FirebaseFirestore.instance
+          .collection('chat_rooms')
+          .where('participants', arrayContainsAny: [currentUser.uid, contactUserId, postAuthorId])
+          .get();
+
+      String roomId = '';
+      bool roomExists = false;
+
+      for (var doc in existingRoomQuery.docs) {
+        List<dynamic> participants = doc['participants'];
+        if (participants.contains(currentUser.uid) &&
+            participants.contains(contactUserId) &&
+            participants.contains(postAuthorId)) {
+          roomId = doc.id;
+          roomExists = true;
+          break;
+        }
+      }
+
+      if (!roomExists) {
+        // Create a unique room ID if no existing room was found
+        roomId = '${currentUser.uid}_${contactUserId}_$postAuthorId'
+            .split('_')
+            .toSet()
+            .toList()
+            .join('_');
+
+        // Create the chat room document
+        await FirebaseFirestore.instance.collection('chat_rooms').doc(roomId).set({
+          'participants': [currentUser.uid, contactUserId, postAuthorId],
+          'createdAt': FieldValue.serverTimestamp(),
+          'lastMessage': null,
+          'lastMessageTimestamp': FieldValue.serverTimestamp(),
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('New chat room created with ${contact.displayName}')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Joining existing chat room with ${contact.displayName}')),
+        );
+      }
+
+      // Navigate to the chat room
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => ChatRoomScreen(roomId: roomId, contactName: contact.displayName),
+        ),
+      );
+
+    } catch (e) {
+      print('Error creating/joining chat room: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to create/join chat room: ${e.toString()}')),
+      );
+    }
+  }
+
+  bool arePhoneNumbersEqual(String phone1, String phone2) {
+    // Remove all non-digit characters
+    String cleanPhone1 = phone1.replaceAll(RegExp(r'\D'), '');
+    String cleanPhone2 = phone2.replaceAll(RegExp(r'\D'), '');
+
+    // If one number has a country code and the other doesn't, compare the shorter one to the end of the longer one
+    if (cleanPhone1.length != cleanPhone2.length) {
+      String shorterNumber = cleanPhone1.length < cleanPhone2.length ? cleanPhone1 : cleanPhone2;
+      String longerNumber = cleanPhone1.length > cleanPhone2.length ? cleanPhone1 : cleanPhone2;
+      return longerNumber.endsWith(shorterNumber);
+    }
+
+    // If they're the same length, compare them directly
+    return cleanPhone1 == cleanPhone2;
   }
 
   // Update this method to handle Timestamp
@@ -518,24 +698,6 @@ class _HomePageState extends State<HomePage> {
         SnackBar(content: Text("Failed to send friend request: ${e.toString()}")),
       );
     }
-  }
-
-  bool arePhoneNumbersEqual(String phone1, String phone2) {
-    // Remove all non-digit characters
-    String cleanPhone1 = phone1.replaceAll(RegExp(r'\D'), '');
-    String cleanPhone2 = phone2.replaceAll(RegExp(r'\D'), '');
-    print("Comparing $phone1 and $phone2");
-    print("Clean numbers: $cleanPhone1 and $cleanPhone2");
-
-    // If one number has a country code and the other doesn't, compare the shorter one to the end of the longer one
-    if (cleanPhone1.length != cleanPhone2.length) {
-      String shorterNumber = cleanPhone1.length < cleanPhone2.length ? cleanPhone1 : cleanPhone2;
-      String longerNumber = cleanPhone1.length > cleanPhone2.length ? cleanPhone1 : cleanPhone2;
-      return longerNumber.endsWith(shorterNumber);
-    }
-
-    // If they're the same length, compare them directly
-    return cleanPhone1 == cleanPhone2;
   }
 
   Future<void> _addPost(BuildContext context, String username, String content) async {
