@@ -2,6 +2,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:trust/login.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'dart:convert';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({Key? key}) : super(key: key);
@@ -37,7 +40,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Future<void> _loadProfileData() async {
     final user = FirebaseAuth.instance.currentUser;
-
+    print('User: $user');
     if (user != null) {
       try {
         print('Loading profile data for user: ${user.uid}');
@@ -58,7 +61,7 @@ class _ProfilePageState extends State<ProfilePage> {
             _dobController.text = _selectedDate != null
                 ? DateFormat('yyyy-MM-dd').format(_selectedDate!)
                 : '';
-            _phoneMobileController.text = data['phone_mobile'] ?? '';
+            _phoneMobileController.text = user.phoneNumber ?? '';
             _phoneHomeController.text = data['phone_home'] ?? '';
             _emailPersonalController.text = data['email_personal'] ?? '';
             _emailWorkController.text = data['email_work'] ?? '';
@@ -84,25 +87,42 @@ class _ProfilePageState extends State<ProfilePage> {
 
     if (user != null) {
       try {
-        await FirebaseFirestore.instance
+        // Create a batch to perform multiple operations
+        final batch = FirebaseFirestore.instance.batch();
+        
+        // Reference to profile document
+        final profileRef = FirebaseFirestore.instance
             .collection('profiles')
-            .doc(user.uid)
-            .set({
-              'name': _nameController.text,
-              'date_of_birth': _selectedDate != null ? Timestamp.fromDate(_selectedDate!) : null,
-              'phone_mobile': _phoneMobileController.text,
-              'phone_home': _phoneHomeController.text,
-              'email_personal': _emailPersonalController.text,
-              'email_work': _emailWorkController.text,
-              'address': _addressController.text,
-              'company': _companyController.text,
-              'job_title': _jobTitleController.text,
-              'discord': _discordController.text,
-              'telegram': _telegramController.text,
-              'linkedin': _linkedinController.text,
-              'website': _websiteController.text,
-              'skills': _skills,
-            }, SetOptions(merge: true));
+            .doc(user.uid);
+        
+        // Reference to registered_users document
+        final userRef = FirebaseFirestore.instance
+            .collection('registered_users')
+            .doc(user.uid);
+        
+        // Update profile document
+        batch.set(profileRef, {
+          'name': _nameController.text,
+          'date_of_birth': _selectedDate != null ? Timestamp.fromDate(_selectedDate!) : null,
+          'phone_mobile': _phoneMobileController.text,
+          'phone_home': _phoneHomeController.text,
+          'email_personal': _emailPersonalController.text,
+          'email_work': _emailWorkController.text,
+          'address': _addressController.text,
+          'company': _companyController.text,
+          'job_title': _jobTitleController.text,
+          'discord': _discordController.text,
+          'telegram': _telegramController.text,
+          'linkedin': _linkedinController.text,
+          'website': _websiteController.text,
+          'skills': _skills,
+        }, SetOptions(merge: true));
+        
+        // Update name in registered_users document
+        batch.update(userRef, {'name': _nameController.text});
+        
+        // Commit the batch
+        await batch.commit();
 
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Profile updated successfully')),
@@ -141,12 +161,16 @@ class _ProfilePageState extends State<ProfilePage> {
         iconTheme: const IconThemeData(color: Color(0xFFF4845F)),
         actions: [
           IconButton(
+            icon: const Icon(Icons.qr_code_scanner),
+            color: const Color(0xFFF4845F),
+            onPressed: _showQRScanner,
+          ),
+          IconButton(
             icon: Icon(_isEditing ? Icons.save : Icons.edit),
             color: const Color(0xFFF4845F),
             onPressed: () async {
               setState(() {
                 _isEditing = !_isEditing;
-                // Save changes if exiting edit mode
                 if (!_isEditing) {
                   _saveProfileData();
                 }
@@ -186,33 +210,6 @@ class _ProfilePageState extends State<ProfilePage> {
                                     ),
                                   )
                                 : Text(_nameController.text, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 8),
-                            _isEditing
-                                ? InkWell(
-                                    onTap: () => _selectDate(context),
-                                    child: InputDecorator(
-                                      decoration: const InputDecoration(
-                                        labelText: 'Date of Birth',
-                                        border: OutlineInputBorder(),
-                                      ),
-                                      child: Row(
-                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                        children: [
-                                          Text(_dobController.text),
-                                          const Icon(Icons.calendar_today),
-                                        ],
-                                      ),
-                                    ),
-                                  )
-                                : Text(
-                                    _dobController.text.isNotEmpty
-                                        ? _dobController.text
-                                        : 'Date of Birth not set',
-                                    style: TextStyle(
-                                      color: _dobController.text.isNotEmpty ? const Color.fromARGB(255, 33, 31, 31) : const Color.fromARGB(255, 54, 51, 50),
-                                      fontStyle: _dobController.text.isNotEmpty ? FontStyle.normal : FontStyle.normal,
-                                    ),
-                                  ),
                           ],
                         ),
                       ),
@@ -221,6 +218,46 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
               ),
               const SizedBox(height: 16),
+
+              // Date of Birth Card
+              _buildSectionCard('Date of Birth', [
+                _isEditing
+                    ? InkWell(
+                        onTap: () => _selectDate(context),
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Date of Birth',
+                            border: OutlineInputBorder(),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(_dobController.text),
+                              const Icon(Icons.calendar_today),
+                            ],
+                          ),
+                        ),
+                      )
+                    : Row(
+                        children: [
+                          const Icon(Icons.calendar_today, size: 20, color: Color(0xFFF4845F)),
+                          const SizedBox(width: 8),
+                          Text(
+                            _dobController.text.isNotEmpty
+                                ? _dobController.text
+                                : 'Date of Birth not set',
+                            style: TextStyle(
+                              color: _dobController.text.isNotEmpty 
+                                  ? const Color.fromARGB(255, 33, 31, 31) 
+                                  : const Color.fromARGB(255, 54, 51, 50),
+                              fontStyle: _dobController.text.isNotEmpty 
+                                  ? FontStyle.normal 
+                                  : FontStyle.normal,
+                            ),
+                          ),
+                        ],
+                      ),
+              ]),
               
               // Contact Information
               _buildSectionCard('Contact Information', [
@@ -316,17 +353,29 @@ class _ProfilePageState extends State<ProfilePage> {
                 width: double.infinity,
                 child: ElevatedButton(
                   onPressed: () async {
-                    // Supabase logout
-                    await FirebaseAuth.instance.signOut();
-                    print('Logout pressed');
-                    // Navigate to login page after logout
-                    Navigator.of(context).pushReplacementNamed('/login');
+                    try {
+                      await FirebaseAuth.instance.signOut();
+                      if (mounted) {
+                        // Navigate to login page and remove all previous routes
+                        Navigator.of(context).pushAndRemoveUntil(
+                          MaterialPageRoute(builder: (context) => const PhoneLoginScreen()),
+                          (Route<dynamic> route) => false,
+                        );
+                      }
+                    } catch (e) {
+                      print('Error signing out: $e');
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Error signing out: $e')),
+                        );
+                      }
+                    }
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFF4845F),
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
-                  child: const Text('Logout', style: TextStyle(color: Colors.white)),
+                  child: const Text('Sign Out', style: TextStyle(color: Colors.white)),
                 ),
               ),
             ],
@@ -398,5 +447,92 @@ class _ProfilePageState extends State<ProfilePage> {
 
   String _getAvatarUrl() {
     return 'https://ui-avatars.com/api/?background=0D8ABC&color=fff&name=${Uri.encodeComponent(_nameController.text)}&rounded=true';
+  }
+
+  Future<void> _onQRCodeScanned(String qrData) async {
+    try {
+      final data = jsonDecode(qrData);
+      if (data['type'] != 'auth') {
+        throw Exception('Invalid QR code type');
+      }
+      
+      final sessionId = data['sessionId'];
+      print("SessionId: $sessionId");
+      
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        throw Exception('User not logged in');
+      }
+      
+      await FirebaseFirestore.instance
+          .collection('authSessions')
+          .doc(sessionId)
+          .set({
+        'status': 'authenticated',
+        'userId': user.uid,
+        'lastUpdated': FieldValue.serverTimestamp(),
+        'authenticatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Successfully authenticated!')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Authentication failed: $e')),
+        );
+      }
+    }
+  }
+
+  void _showQRScanner() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.8,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              leading: IconButton(
+                icon: const Icon(Icons.close, color: Colors.black),
+                onPressed: () => Navigator.pop(context),
+              ),
+              title: const Text('Scan QR Code', style: TextStyle(color: Colors.black)),
+              centerTitle: true,
+            ),
+            Expanded(
+              child: MobileScanner(
+                onDetect: (capture) {
+                  final List<Barcode> barcodes = capture.barcodes;
+                  if (barcodes.isNotEmpty) {
+                    final String? qrData = barcodes.first.rawValue;
+                    print("QR Data: $qrData");
+                    if (qrData != null) {
+                      Future.delayed(Duration.zero, () {
+                        if (mounted) {
+                          Navigator.pop(context);
+                          _onQRCodeScanned(qrData);
+                        }
+                      });
+                    }
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

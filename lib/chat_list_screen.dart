@@ -19,17 +19,25 @@ class ChatListScreen extends StatelessWidget {
       stream: FirebaseFirestore.instance
           .collection('chat_rooms')
           .where('participants', arrayContains: currentUser.uid)
-          .orderBy('lastMessageTimestamp', descending: true)
           .snapshots(),
       builder: (context, snapshot) {
-
-        print('Snapshot data: ${snapshot.data}');
+        // Print the entire snapshot data
+        print('Debug: Snapshot data: ${snapshot.data}');
+        
+        // Print individual documents in the snapshot
+        if (snapshot.hasData) {
+          for (var doc in snapshot.data!.docs) {
+            print('Document ID: ${doc.id}');
+            print('Document data: ${doc.data()}');
+          }
+        }
+        
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
 
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return Center(child: Text('No chats found. Data: ${snapshot.data}, Docs: ${snapshot.data?.docs.length}'));
+          return const Center(child: Text('No chats found'));
         }
 
         return ListView.builder(
@@ -37,46 +45,106 @@ class ChatListScreen extends StatelessWidget {
           itemBuilder: (context, index) {
             final chatRoom = snapshot.data!.docs[index];
             final participants = List<String>.from(chatRoom['participants']);
-            final otherUserId = participants.firstWhere(
-              (id) => id != currentUser.uid,
-              orElse: () => 'Unknown User',
+            final isGroupChat = participants.length > 2;
+
+            if (isGroupChat) {
+              return _buildGroupChatTile(context, chatRoom, currentUser!.uid);
+            } else {
+              return _buildOneOnOneChatTile(context, chatRoom, currentUser!.uid);
+            }
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildGroupChatTile(BuildContext context, DocumentSnapshot chatRoom, String currentUserId) {
+    final participants = List<String>.from(chatRoom['participants']);
+    participants.remove(currentUserId);
+
+    return FutureBuilder<List<DocumentSnapshot>>(
+      future: Future.wait(participants.map((userId) => 
+        FirebaseFirestore.instance.collection('registered_users').doc(userId).get()
+      )),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const ListTile(title: Text('Loading...'));
+        }
+
+        final otherUsers = snapshot.data!;
+        final memberNames = otherUsers
+            .map((user) => user['name'] as String)
+            .join(', ');
+
+        return ListTile(
+          leading: CircleAvatar(
+            backgroundColor: Colors.blue,
+            child: Icon(Icons.group, color: Colors.white),
+          ),
+          title: Text('Group Chat'),
+          subtitle: Text(memberNames),
+          trailing: chatRoom['lastMessageTimestamp'] != null
+              ? Text(
+                  _formatTimestamp(chatRoom['lastMessageTimestamp'] as Timestamp),
+                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                )
+              : null,
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => ChatRoomScreen(
+                  roomId: chatRoom.id,
+                  contactName: 'Group Chat',
+                  participantNames: memberNames,
+                ),
+              ),
             );
+          },
+        );
+      },
+    );
+  }
 
-            return FutureBuilder<DocumentSnapshot>(
-              future: FirebaseFirestore.instance.collection('registered_users').doc(otherUserId).get(),
-              builder: (context, userSnapshot) {
-                if (!userSnapshot.hasData) {
-                  return const ListTile(title: Text('Loading...'));
-                }
+  Widget _buildOneOnOneChatTile(BuildContext context, DocumentSnapshot chatRoom, String currentUserId) {
+    final participants = List<String>.from(chatRoom['participants']);
+    final otherUserId = participants.firstWhere(
+      (id) => id != currentUserId,
+      orElse: () => 'Unknown User',
+    );
 
-                final otherUserData = userSnapshot.data!.data() as Map<String, dynamic>?;
-                final otherUserName = otherUserData?['name'] ?? 'Unknown User';
+    return FutureBuilder<DocumentSnapshot>(
+      future: FirebaseFirestore.instance.collection('registered_users').doc(otherUserId).get(),
+      builder: (context, userSnapshot) {
+        if (!userSnapshot.hasData) {
+          return const ListTile(title: Text('Loading...'));
+        }
 
-                return ListTile(
-                  leading: CircleAvatar(
-                    child: Text(otherUserName[0]),
-                  ),
-                  title: Text(otherUserName),
-                  subtitle: Text(chatRoom['lastMessage'] ?? 'No messages yet'),
-                  trailing: chatRoom['lastMessageTimestamp'] != null
-                      ? Text(
-                          _formatTimestamp(chatRoom['lastMessageTimestamp'] as Timestamp),
-                          style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                        )
-                      : null,
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ChatRoomScreen(
-                          roomId: chatRoom.id,
-                          contactName: otherUserName,
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
+        final otherUserData = userSnapshot.data!.data() as Map<String, dynamic>?;
+        final otherUserName = otherUserData?['name'] ?? 'Unknown User';
+
+        return ListTile(
+          leading: CircleAvatar(
+            child: Text(otherUserName[0]),
+          ),
+          title: Text(otherUserName),
+          subtitle: Text(chatRoom['lastMessage'] ?? 'No messages yet'),
+          trailing: chatRoom['lastMessageTimestamp'] != null
+              ? Text(
+                  _formatTimestamp(chatRoom['lastMessageTimestamp'] as Timestamp),
+                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                )
+              : null,
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => ChatRoomScreen(
+                  roomId: chatRoom.id,
+                  contactName: otherUserName,
+                  participantNames: otherUserName,
+                ),
+              ),
             );
           },
         );

@@ -9,10 +9,12 @@ import 'friend_service.dart';
 import 'contacts.dart';
 import 'chat_room_screen.dart';
 import 'chat_list_screen.dart'; // Add this import
+import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
 
+  const HomePage({super.key});
   @override
   State<HomePage> createState() => _HomePageState();
 }
@@ -26,100 +28,138 @@ class _HomePageState extends State<HomePage> {
   List<Map<String, dynamic>> friendRequests = [];
   Map<String, bool> sentFriendRequests = {};
   List<Contact> friendContacts = [];
+  String _userName = 'John Doe'; // Add this line
+
+  // Update loading state variables to be more specific
+  bool _isLoading = true;
+  bool _isPostsLoading = true;
+  bool _isContactsLoading = true;
+  bool _isFriendRequestsLoading = true;
+  bool _isRegisteredContactsLoading = true;  // Add this line
 
   @override
   void initState() {
     super.initState();
-    _loadContacts();
-    _loadFriendRequests();
-    _loadFriendContacts();
-    _checkRegisteredContacts();
-    _loadPosts();  // Add this line
+    _loadAllData();
   }
 
-//load the contacts from the phone
+  // Update _loadAllData method
+  Future<void> _loadAllData() async {
+    try {
+      await Future.wait([
+        _loadContacts(),
+        _loadFriendRequests(),
+        _loadFriendContacts(),
+        _loadPosts(),
+        _loadUserName(),
+      ]);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  // Add this method
+  Future<void> _loadUserName() async {
+    final prefs = await SharedPreferences.getInstance();
+    final name = prefs.getString('user_name');
+    setState(() {
+      _userName = name ?? 'John Doe';
+    });
+  }
+
+  // Update _loadContacts method
   Future<void> _loadContacts() async {
+    setState(() => _isContactsLoading = true);
     try {
       final allContacts = await ContactService.getContacts();
-      print("Loaded ${allContacts.length} contacts");
-      setState(() {
-        contacts = allContacts;
-      });
-      print("Contacts in state: ${contacts.length}");
-      
-      // Print contact details including organization information
-      for (var contact in contacts) {
-        String company = 'N/A';
-        String title = 'N/A';
-        
-        if (contact.organizations.isNotEmpty) {
-          company = contact.organizations.first.company ?? 'N/A';
-          title = contact.organizations.first.title ?? 'N/A';
-        }
-        
-        print("Name: ${contact.displayName}, Phone: ${contact.phones.firstOrNull?.number ?? 'N/A'}, Company: $company, Title: $title");
+      if (mounted) {
+        setState(() {
+          contacts = allContacts;
+          _isContactsLoading = false;
+        });
       }
+      await _checkRegisteredContacts();
     } catch (e) {
       print('Error loading contacts: $e');
-      // Handle error (e.g., show a snackbar)
+      if (mounted) {
+        setState(() => _isContactsLoading = false);
+      }
     }
   }
 
   Future<void> _checkRegisteredContacts() async {
-    final registeredUsers = await FirebaseFirestore.instance.collection('registered_users').get();
-    final currentUser = FirebaseAuth.instance.currentUser;
-    
-    if (currentUser == null) return;
+    setState(() => _isRegisteredContactsLoading = true);
+    try {
+      final registeredUsers = await FirebaseFirestore.instance.collection('registered_users').get();
+      final currentUser = FirebaseAuth.instance.currentUser;
+      
+      if (currentUser == null) return;
 
-    // Get the current user's friends
-    final friendsDoc = await FirebaseFirestore.instance.collection('Network').doc(currentUser.uid).get();
-    List<String> friendIds = [];
-    if (friendsDoc.exists) {
-      friendIds = List<String>.from(friendsDoc.data()?['friends'] ?? []);
-    }
+      final friendsDoc = await FirebaseFirestore.instance.collection('Network').doc(currentUser.uid).get();
+      List<String> friendIds = [];
+      if (friendsDoc.exists) {
+        friendIds = List<String>.from(friendsDoc.data()?['friends'] ?? []);
+      }
 
-    List<Contact> newRegisteredContacts = [];
+      List<Contact> newRegisteredContacts = [];
 
-    for (var contact in contacts) {
-      for (var user in registeredUsers.docs) {
-        if (contact.phones.isNotEmpty) {
-          String contactPhone = contact.phones.first.number.replaceAll(RegExp(r'\D'), '');
-          String userPhone = user.data()['phoneNumber'].replaceAll(RegExp(r'\D'), '');
-          
-          if (contactPhone == userPhone && !friendIds.contains(user.id) && user.id != currentUser.uid) {
-            newRegisteredContacts.add(contact);
-            break;
+      for (var contact in contacts) {
+        for (var user in registeredUsers.docs) {
+          if (contact.phones.isNotEmpty) {
+            String contactPhone = contact.phones.first.number.replaceAll(RegExp(r'\D'), '');
+            String userPhone = user.data()['phoneNumber'].replaceAll(RegExp(r'\D'), '');
+            
+            if (contactPhone == userPhone && !friendIds.contains(user.id) && user.id != currentUser.uid) {
+              newRegisteredContacts.add(contact);
+              break;
+            }
           }
         }
       }
-    }
 
-    // Check if the widget is still mounted before calling setState
-    if (mounted) {
-      setState(() {
-        registeredContacts = newRegisteredContacts;
-      });
+      if (mounted) {
+        setState(() {
+          registeredContacts = newRegisteredContacts;
+          _isRegisteredContactsLoading = false;
+        });
+      }
+    } catch (e) {
+      print('Error checking registered contacts: $e');
+      if (mounted) {
+        setState(() => _isRegisteredContactsLoading = false);
+      }
     }
   }
 
+  // Update _loadFriendRequests method
   Future<void> _loadFriendRequests() async {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return;
+    setState(() => _isFriendRequestsLoading = true);
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
 
-    final snapshot = await FirebaseFirestore.instance
-        .collection('friend_requests')
-        .where('recipientId', isEqualTo: currentUser.uid)
-        .where('status', isEqualTo: 'pending')
-        .get();
+      final snapshot = await FirebaseFirestore.instance
+          .collection('friend_requests')
+          .where('recipientId', isEqualTo: currentUser.uid)
+          .where('status', isEqualTo: 'pending')
+          .get();
 
-    print("Friend requests data:");
-    snapshot.docs.forEach((doc) {
-      print(doc.data());
-    });
-
-    setState(() {
-      friendRequests = snapshot.docs.map((doc) => doc.data()).toList();
-    });
+      if (mounted) {
+        setState(() {
+          friendRequests = snapshot.docs.map((doc) => doc.data()).toList();
+          _isFriendRequestsLoading = false;
+        });
+      }
+    } catch (e) {
+      print('Error loading friend requests: $e');
+      if (mounted) {
+        setState(() => _isFriendRequestsLoading = false);
+      }
+    }
   }
 
   Future<void> _loadFriendContacts() async {
@@ -143,17 +183,18 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: _currentIndex == 0 ? AppBar(
+      appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
         title: _buildSearchBar(),
-      ) : null,
+        automaticallyImplyLeading: false,
+      ),
       body: IndexedStack(
         index: _currentIndex,
         children: [
-          _buildHomePage(context, 'John Doe'),
-          const ContactsPage(),
-          ChatListScreen(), // Add this line
+          _buildHomePage(context, _userName),
+          ContactsPage(searchQuery: _searchController.text),
+          ChatListScreen(),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
@@ -187,15 +228,23 @@ class _HomePageState extends State<HomePage> {
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: 'Search...',
+                hintText: _getSearchHint(),
                 prefixIcon: const Icon(Icons.search, color: Color(0xFFF4845F)),
                 border: InputBorder.none,
                 contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          setState(() {
+                            _searchController.clear();
+                            _performSearch('');
+                          });
+                        },
+                      )
+                    : null,
               ),
-              onChanged: (value) {
-                // Implement search functionality here
-                // _performSearch(value);
-              },
+              onChanged: _performSearch,
             ),
           ),
         ),
@@ -215,7 +264,9 @@ class _HomePageState extends State<HomePage> {
             child: CircleAvatar(
               radius: 20,
               backgroundColor: Colors.white,
-              backgroundImage: NetworkImage('https://ui-avatars.com/api/?background=0D8ABC&color=fff&name=${Uri.encodeComponent("John Doe")}&rounded=true'),
+              backgroundImage: NetworkImage(
+                'https://ui-avatars.com/api/?background=0D8ABC&color=fff&name=${Uri.encodeComponent(_userName)}&rounded=true'
+              ),
             ),
           ),
         ),
@@ -223,7 +274,53 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  String _getSearchHint() {
+    switch (_currentIndex) {
+      case 0:
+        return 'Search posts...';
+      case 1:
+        return 'Search contacts...';
+      case 2:
+        return 'Search chats...';
+      default:
+        return 'Search...';
+    }
+  }
+
+  void _performSearch(String query) {
+    switch (_currentIndex) {
+      case 0:
+        // Handle home page search
+        setState(() {
+          if (query.isEmpty) {
+            _loadPosts();
+          } else {
+            posts = posts.where((post) =>
+              post['content'].toString().toLowerCase().contains(query.toLowerCase()) ||
+              post['username'].toString().toLowerCase().contains(query.toLowerCase())
+            ).toList();
+          }
+        });
+        break;
+      case 1:
+        // Just update the search query, ContactsPage will handle the filtering
+        setState(() {}); // This will trigger a rebuild of ContactsPage with new search query
+        break;
+      case 2:
+        // Handle chat search
+        break;
+    }
+  }
+
   Widget _buildHomePage(BuildContext context, String username) {
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4845F)),
+        ),
+      );
+    }
+
     return Scaffold(
       body: SafeArea(
         child: Column(
@@ -232,7 +329,14 @@ class _HomePageState extends State<HomePage> {
             Expanded(
               child: ListView(
                 children: [
-                  if (friendRequests.isNotEmpty) ...[
+                  if (_isFriendRequestsLoading)
+                    const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(child: CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4845F)),
+                      )),
+                    )
+                  else if (friendRequests.isNotEmpty) ...[
                     const Padding(
                       padding: EdgeInsets.all(16),
                       child: Text(
@@ -249,7 +353,12 @@ class _HomePageState extends State<HomePage> {
                       style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                     ),
                   ),
-                  ...registeredContacts.map((contact) => _buildContactCard(contact)),
+                  if (_isRegisteredContactsLoading)
+                    const Center(child: CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4845F)),
+                    ))
+                  else
+                    ...registeredContacts.map((contact) => _buildContactCard(contact)),
                   const Padding(
                     padding: EdgeInsets.all(16),
                     child: Text(
@@ -257,7 +366,12 @@ class _HomePageState extends State<HomePage> {
                       style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                     ),
                   ),
-                  ...posts.map((post) => _buildPostCard(post)),  // Use this instead of _buildDemoPosts
+                  if (_isPostsLoading)
+                    const Center(child: CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4845F)),
+                    ))
+                  else
+                    ...posts.map((post) => _buildPostCard(post)),
                 ],
               ),
             ),
@@ -276,12 +390,16 @@ class _HomePageState extends State<HomePage> {
 
   // Add this new method to build post cards
   Widget _buildPostCard(Map<String, dynamic> post) {
-    bool containsBlockchain = post['content'].toString().toLowerCase().contains('blockchain');
-    List<Contact> blockchainContacts = [];
+    List<String> contentWords = post['content'].toString().toLowerCase().split(' ');
+    List<Contact> matchingContacts = [];
 
-    if (containsBlockchain) {
-      blockchainContacts = contacts.where((contact) => 
-        contact.displayName.toLowerCase().contains('blockchain')).toList();
+    for (var contact in contacts) {
+      if (contact.organizations.isNotEmpty) {
+        String title = contact.organizations.first.title?.toLowerCase() ?? '';
+        if (contentWords.any((word) => title.contains(word))) {
+          matchingContacts.add(contact);
+        }
+      }
     }
 
     return Card(
@@ -303,23 +421,14 @@ class _HomePageState extends State<HomePage> {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: FutureBuilder<String?>(
-                    future: ContactService.getNameByPhoneNumber(post['phone'] as String? ?? ''),
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const CircularProgressIndicator();
-                      }
-                      final displayName = snapshot.data ?? post['username'] as String? ?? 'Unknown';
-                      return Flexible(
-                        child: Text(
-                          displayName,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      );
-                    },
+                  child: Flexible(
+                    child: Text(
+                          post['username'] as String? ?? 'Unknown',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
+                ),  
               ],
             ),
             const SizedBox(height: 8),
@@ -329,18 +438,17 @@ class _HomePageState extends State<HomePage> {
               _formatTimestamp(post['timestamp']),
               style: const TextStyle(color: Colors.grey),
             ),
-            if (containsBlockchain && blockchainContacts.isNotEmpty) ...[
+            if (matchingContacts.isNotEmpty) ...[
               const SizedBox(height: 16),
-              Text(
-                'Would you like to connect with blockchain contacts?',
+              const Text(
+                'Would you like to connect with contacts related to this post?',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
               Row(
                 children: [
                   ElevatedButton(
                     onPressed: () {
-                      // Pass the post author's ID to _showBlockchainContacts
-                      _showBlockchainContacts(blockchainContacts, post['user_id'] as String);
+                      _showMatchingContacts(matchingContacts, post['user_id'] as String);
                     },
                     child: Text('Yes'),
                   ),
@@ -362,20 +470,21 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _showBlockchainContacts(List<Contact> blockchainContacts, String postAuthorId) {
+  void _showMatchingContacts(List<Contact> matchingContacts, String postAuthorId) {
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Text('Blockchain Contacts'),
+          title: Text('Matching Contacts'),
           content: SingleChildScrollView(
             child: ListBody(
-              children: blockchainContacts.map((contact) => 
+              children: matchingContacts.map((contact) => 
                 ListTile(
                   title: Text(contact.displayName),
-                  subtitle: Text(contact.phones.isNotEmpty ? contact.phones.first.number : 'No phone number'),
+                  subtitle: Text(contact.organizations.isNotEmpty 
+                    ? contact.organizations.first.title ?? 'No title' 
+                    : 'No title'),
                   onTap: () {
-                    // Handle contact selection
                     Navigator.of(context).pop();
                     _createChatRoom(contact, postAuthorId);
                   },
@@ -466,7 +575,7 @@ class _HomePageState extends State<HomePage> {
       // Navigate to the chat room
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (context) => ChatRoomScreen(roomId: roomId, contactName: contact.displayName),
+          builder: (context) => ChatRoomScreen(roomId: roomId, contactName: contact.displayName, participantNames:''),
         ),
       );
 
@@ -769,18 +878,25 @@ class _HomePageState extends State<HomePage> {
 
   // Add this new method to load posts
   Future<void> _loadPosts() async {
+    setState(() => _isPostsLoading = true);
     try {
       final snapshot = await FirebaseFirestore.instance
           .collection('posts')
           .orderBy('timestamp', descending: true)
-          .limit(10)  // Limit to the most recent 10 posts
+          .limit(10)
           .get();
 
-      setState(() {
-        posts = snapshot.docs.map((doc) => doc.data()).toList();
-      });
+      if (mounted) {
+        setState(() {
+          posts = snapshot.docs.map((doc) => doc.data()).toList();
+          _isPostsLoading = false;
+        });
+      }
     } catch (e) {
       print('Error loading posts: $e');
+      if (mounted) {
+        setState(() => _isPostsLoading = false);
+      }
     }
   }
 
