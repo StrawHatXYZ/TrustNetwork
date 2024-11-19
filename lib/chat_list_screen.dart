@@ -21,16 +21,6 @@ class ChatListScreen extends StatelessWidget {
           .where('participants', arrayContains: currentUser.uid)
           .snapshots(),
       builder: (context, snapshot) {
-        // Print the entire snapshot data
-        print('Debug: Snapshot data: ${snapshot.data}');
-        
-        // Print individual documents in the snapshot
-        if (snapshot.hasData) {
-          for (var doc in snapshot.data!.docs) {
-            print('Document ID: ${doc.id}');
-            print('Document data: ${doc.data()}');
-          }
-        }
         
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());

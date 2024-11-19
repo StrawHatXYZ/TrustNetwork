@@ -25,8 +25,6 @@ class _HomePageState extends State<HomePage> {
   final TextEditingController _searchController = TextEditingController();
   List<Contact> contacts = [];
   List<Contact> registeredContacts = [];
-  List<Map<String, dynamic>> friendRequests = [];
-  Map<String, bool> sentFriendRequests = {};
   List<Contact> friendContacts = [];
   String _userName = 'John Doe'; // Add this line
 
@@ -34,13 +32,15 @@ class _HomePageState extends State<HomePage> {
   bool _isLoading = true;
   bool _isPostsLoading = true;
   bool _isContactsLoading = true;
-  bool _isFriendRequestsLoading = true;
   bool _isRegisteredContactsLoading = true;  // Add this line
 
   @override
   void initState() {
     super.initState();
-    _loadAllData();
+    // Call async work without awaiting
+    ContactService.initializeContactsInFirebase().then((_) {
+      _loadAllData();
+    });
   }
 
   // Update _loadAllData method
@@ -48,10 +48,9 @@ class _HomePageState extends State<HomePage> {
     try {
       await Future.wait([
         _loadContacts(),
-        _loadFriendRequests(),
-        _loadFriendContacts(),
         _loadPosts(),
         _loadUserName(),
+        _loadRegisteredContacts(),
       ]);
     } finally {
       if (mounted) {
@@ -99,13 +98,20 @@ class _HomePageState extends State<HomePage> {
       
       if (currentUser == null) return;
 
+      // Get current user's phone number
+      final currentUserDoc = await FirebaseFirestore.instance
+          .collection('registered_users')
+          .doc(currentUser.uid)
+          .get();
+
+      // final currentUserPhone = currentUserDoc.data()?['phoneNumber']?.replaceAll(RegExp(r'\D'), '');
+
+      // Get existing friends
       final friendsDoc = await FirebaseFirestore.instance.collection('Network').doc(currentUser.uid).get();
       List<String> friendIds = [];
       if (friendsDoc.exists) {
         friendIds = List<String>.from(friendsDoc.data()?['friends'] ?? []);
       }
-
-      List<Contact> newRegisteredContacts = [];
 
       for (var contact in contacts) {
         for (var user in registeredUsers.docs) {
@@ -114,7 +120,8 @@ class _HomePageState extends State<HomePage> {
             String userPhone = user.data()['phoneNumber'].replaceAll(RegExp(r'\D'), '');
             
             if (contactPhone == userPhone && !friendIds.contains(user.id) && user.id != currentUser.uid) {
-              newRegisteredContacts.add(contact);
+              // Automatically add to network
+              await _addMutualConnection(currentUser.uid, user.id);
               break;
             }
           }
@@ -123,7 +130,6 @@ class _HomePageState extends State<HomePage> {
 
       if (mounted) {
         setState(() {
-          registeredContacts = newRegisteredContacts;
           _isRegisteredContactsLoading = false;
         });
       }
@@ -135,43 +141,46 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // Update _loadFriendRequests method
-  Future<void> _loadFriendRequests() async {
-    setState(() => _isFriendRequestsLoading = true);
-    try {
-      final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) return;
+  Future<void> _addMutualConnection(String userId1, String userId2) async {
+    final batch = FirebaseFirestore.instance.batch();
+    final networkCollection = FirebaseFirestore.instance.collection('Network');
 
-      final snapshot = await FirebaseFirestore.instance
-          .collection('friend_requests')
-          .where('recipientId', isEqualTo: currentUser.uid)
-          .where('status', isEqualTo: 'pending')
-          .get();
+    final user1Ref = networkCollection.doc(userId1);
+    final user2Ref = networkCollection.doc(userId2);
 
-      if (mounted) {
-        setState(() {
-          friendRequests = snapshot.docs.map((doc) => doc.data()).toList();
-          _isFriendRequestsLoading = false;
-        });
-      }
-    } catch (e) {
-      print('Error loading friend requests: $e');
-      if (mounted) {
-        setState(() => _isFriendRequestsLoading = false);
-      }
-    }
-  }
+    // Create or update both users' network documents
+    final user1Doc = await user1Ref.get();
+    final user2Doc = await user2Ref.get();
 
-  Future<void> _loadFriendContacts() async {
-    try {
-      final friends = await FriendService.getFriendContacts();
-      setState(() {
-        friendContacts = friends;
+    if (!user1Doc.exists) {
+      batch.set(user1Ref, {'friends': [userId2]});
+    } else {
+      batch.update(user1Ref, {
+        'friends': FieldValue.arrayUnion([userId2])
       });
-    } catch (e) {
-      print('Error loading friend contacts: $e');
     }
+
+    if (!user2Doc.exists) {
+      batch.set(user2Ref, {'friends': [userId1]});
+    } else {
+      batch.update(user2Ref, {
+        'friends': FieldValue.arrayUnion([userId1])
+      });
+    }
+
+    await batch.commit();
   }
+
+  // Future<void> _loadFriendContacts() async {
+  //   try {
+  //     final friends = await FriendService.getFriendContacts();
+  //     setState(() {
+  //       friendContacts = friends;
+  //     });
+  //   } catch (e) {
+  //     print('Error loading friend contacts: $e');
+  //   }
+  // }
 
   @override
   void dispose() {
@@ -232,8 +241,11 @@ class _HomePageState extends State<HomePage> {
                 prefixIcon: const Icon(Icons.search, color: Color(0xFFF4845F)),
                 border: InputBorder.none,
                 contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_searchController.text.isNotEmpty)
+                      IconButton(
                         icon: const Icon(Icons.clear),
                         onPressed: () {
                           setState(() {
@@ -241,8 +253,16 @@ class _HomePageState extends State<HomePage> {
                             _performSearch('');
                           });
                         },
-                      )
-                    : null,
+                      ),
+                    if (_currentIndex == 1)
+                      IconButton(
+                        icon: const Icon(Icons.filter_list),
+                        onPressed: () {
+                          _showFilterDialog(context);
+                        },
+                      ),
+                  ],
+                ),
               ),
               onChanged: _performSearch,
             ),
@@ -322,150 +342,219 @@ class _HomePageState extends State<HomePage> {
     }
 
     return Scaffold(
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: ListView(
-                children: [
-                  if (_isFriendRequestsLoading)
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Center(child: CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4845F)),
-                      )),
-                    )
-                  else if (friendRequests.isNotEmpty) ...[
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text(
-                        'Friend Requests',
-                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    ...friendRequests.map((request) => _buildFriendRequestCard(request)),
-                  ],
-                  const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Text(
-                      'Suggested Contacts',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                    ),
+      body: RefreshIndicator(
+        color: const Color(0xFFF4845F),
+        onRefresh: _loadPosts,
+        child: CustomScrollView(
+          slivers: [
+            const SliverPadding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+              sliver: SliverToBoxAdapter(
+                child: Text(
+                  'Recent Posts',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF2D3142),
                   ),
-                  if (_isRegisteredContactsLoading)
-                    const Center(child: CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4845F)),
-                    ))
-                  else
-                    ...registeredContacts.map((contact) => _buildContactCard(contact)),
-                  const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Text(
-                      'Posts',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  if (_isPostsLoading)
-                    const Center(child: CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4845F)),
-                    ))
-                  else
-                    ...posts.map((post) => _buildPostCard(post)),
-                ],
+                ),
               ),
             ),
+            if (_isPostsLoading)
+              const SliverFillRemaining(
+                child: Center(
+                  child: CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4845F)),
+                  ),
+                ),
+              )
+            else if (posts.isEmpty)
+              SliverFillRemaining(
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.post_add, size: 64, color: Colors.grey[400]),
+                      const SizedBox(height: 16),
+                      Text(
+                        'No posts yet',
+                        style: TextStyle(
+                          fontSize: 18,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _buildPostCard(posts[index]),
+                  childCount: posts.length,
+                ),
+              ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          _showNewPostBottomSheet(context, username);
-        },
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _showNewPostBottomSheet(context, username),
         backgroundColor: const Color(0xFFF4845F),
-        child: const Icon(Icons.add, color: Colors.white),
+        icon: const Icon(Icons.add, color: Colors.white),
+        label: const Text('New Post', style: TextStyle(color: Colors.white)),
       ),
     );
   }
 
-  // Add this new method to build post cards
   Widget _buildPostCard(Map<String, dynamic> post) {
-    List<String> contentWords = post['content'].toString().toLowerCase().split(' ');
-    List<Contact> matchingContacts = [];
+    final currentUser = FirebaseAuth.instance.currentUser;
+    bool isCurrentUserPost = currentUser?.uid == post['user_id'];
 
-    for (var contact in contacts) {
-      if (contact.organizations.isNotEmpty) {
+    List<Contact> matchingContacts = [];
+    if (!isCurrentUserPost) {
+      // Get matching contacts that are registered in the app
+      matchingContacts = contacts.where((contact) {
+        // Skip if contact has no organization info
+        if (contact.organizations.isEmpty) return false;
+        
+        // Check if content words match the contact's title
         String title = contact.organizations.first.title?.toLowerCase() ?? '';
-        if (contentWords.any((word) => title.contains(word))) {
-          matchingContacts.add(contact);
-        }
-      }
+        List<String> contentWords = post['content'].toString().toLowerCase().split(' ');
+        bool hasMatchingTitle = contentWords.any((word) => title.contains(word));
+        
+        // Only return true if contact is registered in the app
+        return hasMatchingTitle && registeredContacts.any((regContact) => 
+          contact.phones.any((phone) => 
+            regContact.phones.any((regPhone) => 
+              arePhoneNumbersEqual(phone.number, regPhone.number)
+            )
+          )
+        );
+      }).toList();
     }
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
               children: [
-                CircleAvatar(
-                  backgroundImage: post['avatar_url'] != null 
-                    ? NetworkImage(post['avatar_url'] as String) 
-                    : null,
-                  child: post['avatar_url'] == null 
-                    ? Text((post['username'] as String? ?? '?')[0], style: const TextStyle(fontSize: 20))
-                    : null,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Flexible(
-                    child: Text(
-                          post['username'] as String? ?? 'Unknown',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                      overflow: TextOverflow.ellipsis,
+                Container(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: const Color(0xFFF4845F),
+                      width: 2,
                     ),
                   ),
-                ),  
+                  child: CircleAvatar(
+                    radius: 24,
+                    backgroundColor: Colors.white,
+                    backgroundImage: post['avatar_url'] != null
+                        ? NetworkImage(post['avatar_url'] as String)
+                        : null,
+                    child: post['avatar_url'] == null
+                        ? Text(
+                            (post['username'] as String? ?? '?')[0],
+                            style: const TextStyle(
+                              fontSize: 20,
+                              color: Color(0xFFF4845F),
+                            ),
+                          )
+                        : null,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        post['username'] as String? ?? 'Unknown',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _formatTimestamp(post['timestamp']),
+                        style: TextStyle(
+                          color: Colors.grey[600],
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
-            const SizedBox(height: 8),
-            Text(post['content'] as String? ?? ''),
-            const SizedBox(height: 8),
-            Text(
-              _formatTimestamp(post['timestamp']),
-              style: const TextStyle(color: Colors.grey),
-            ),
-            if (matchingContacts.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              const Text(
-                'Would you like to connect with contacts related to this post?',
-                style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Text(
+              post['content'] as String? ?? '',
+              style: const TextStyle(
+                fontSize: 15,
+                height: 1.4,
               ),
-              Row(
+            ),
+          ),
+          if (!isCurrentUserPost && matchingContacts.isNotEmpty)
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.grey[50],
+                border: Border(
+                  top: BorderSide(color: Colors.grey.shade200),
+                ),
+              ),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  ElevatedButton(
-                    onPressed: () {
-                      _showMatchingContacts(matchingContacts, post['user_id'] as String);
-                    },
-                    child: Text('Yes'),
+                  Text(
+                    'Found ${matchingContacts.length} related contact${matchingContacts.length > 1 ? 's' : ''}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFFF4845F),
+                    ),
                   ),
-                  SizedBox(width: 8),
-                  ElevatedButton(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Maybe next time!')),
-                      );
-                    },
-                    child: Text('No'),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            _showMatchingContacts(
+                              matchingContacts,
+                              post['user_id'] as String,
+                            );
+                          },
+                          icon: const Icon(Icons.people, size: 18),
+                          label: const Text('Connect'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFF4845F),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
-          ],
-        ),
+            ),
+        ],
       ),
     );
   }
@@ -527,37 +616,54 @@ class _HomePageState extends State<HomePage> {
 
       final contactUserId = contactDoc.id;
 
+      // Create a Set of unique participant IDs
+      final Set<String> uniqueParticipants = {
+        currentUser.uid,
+        contactUserId,
+        postAuthorId,
+      };
+
+      // If we don't have exactly 3 unique participants, show error
+      if (uniqueParticipants.length != 3) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cannot create chat room with duplicate participants')),
+        );
+        return;
+      }
+
+      // Convert Set back to List for Firestore
+      final List<String> participants = uniqueParticipants.toList();
+
       // Check if a chat room already exists with these participants
       final existingRoomQuery = await FirebaseFirestore.instance
           .collection('chat_rooms')
-          .where('participants', arrayContainsAny: [currentUser.uid, contactUserId, postAuthorId])
           .get();
 
-      String roomId = '';
-      bool roomExists = false;
+      String? existingRoomId;
 
+      // Check each room for exact participant match
       for (var doc in existingRoomQuery.docs) {
-        List<dynamic> participants = doc['participants'];
-        if (participants.contains(currentUser.uid) &&
-            participants.contains(contactUserId) &&
-            participants.contains(postAuthorId)) {
-          roomId = doc.id;
-          roomExists = true;
+        List<dynamic> roomParticipants = doc['participants'];
+        if (roomParticipants.length == participants.length &&
+            roomParticipants.toSet().containsAll(participants)) {
+          existingRoomId = doc.id;
           break;
         }
       }
 
-      if (!roomExists) {
-        // Create a unique room ID if no existing room was found
-        roomId = '${currentUser.uid}_${contactUserId}_$postAuthorId'
-            .split('_')
-            .toSet()
-            .toList()
-            .join('_');
-
+      String roomId;
+      if (existingRoomId != null) {
+        roomId = existingRoomId;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Joining existing chat room with ${contact.displayName}')),
+        );
+      } else {
+        // Create new room ID from sorted participant IDs
+        roomId = participants.join('_');
+        
         // Create the chat room document
         await FirebaseFirestore.instance.collection('chat_rooms').doc(roomId).set({
-          'participants': [currentUser.uid, contactUserId, postAuthorId],
+          'participants': participants,
           'createdAt': FieldValue.serverTimestamp(),
           'lastMessage': null,
           'lastMessageTimestamp': FieldValue.serverTimestamp(),
@@ -566,16 +672,16 @@ class _HomePageState extends State<HomePage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('New chat room created with ${contact.displayName}')),
         );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Joining existing chat room with ${contact.displayName}')),
-        );
       }
 
       // Navigate to the chat room
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (context) => ChatRoomScreen(roomId: roomId, contactName: contact.displayName, participantNames:''),
+          builder: (context) => ChatRoomScreen(
+            roomId: roomId,
+            contactName: contact.displayName,
+            participantNames: '',
+          ),
         ),
       );
 
@@ -630,108 +736,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // Add this method to create contact cards
-  Widget _buildContactCard(Contact contact) {
-    bool requestSent = sentFriendRequests[contact.id] ?? false;
-
-    return Dismissible(
-      key: Key(contact.id),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20.0),
-        color: Colors.red,
-        child: const Icon(Icons.delete, color: Colors.white),
-      ),
-      onDismissed: (direction) {
-        _removeContact(contact);
-      },
-      child: Card(
-        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        elevation: 2,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 24,
-                    backgroundImage: contact.photo != null
-                        ? MemoryImage(contact.photo!)
-                        : null,
-                    child: contact.photo == null
-                        ? Text(contact.displayName[0], style: const TextStyle(fontSize: 20))
-                        : null,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          contact.displayName,
-                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          contact.phones.isNotEmpty ? contact.phones.first.number : 'No phone number',
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Do you want to add to your network?',
-                style: TextStyle(fontSize: 18, color: Colors.black87),
-              ),
-              const SizedBox(height: 4),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  ElevatedButton(
-                    onPressed: () {
-                      _removeContact(contact);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.grey,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                    ),
-                    child: Text('No', style: TextStyle(fontSize: 14, color: Colors.white)),
-                  ),
-                  ElevatedButton(
-                    onPressed: requestSent ? null : () {
-                      _addToContacts(contact);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: requestSent ? Colors.grey : const Color(0xFFF4845F),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                    ),
-                    child: Text(
-                      requestSent ? 'Friend request sent' : 'Add to network',
-                      style: const TextStyle(fontSize: 14, color: Colors.white),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   void _removeContact(Contact contact) {
     setState(() {
       registeredContacts.removeWhere((item) => item.id == contact.id);
@@ -739,74 +743,6 @@ class _HomePageState extends State<HomePage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text("${contact.displayName} removed from suggestions")),
     );
-  }
-
-  void _addToContacts(Contact contact) {
-    _sendFriendRequest(contact);
-  }
-
-  Future<void> _sendFriendRequest(Contact contact) async {
-    try {
-      final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) {
-        throw Exception('No user logged in');
-      }
-
-      // Get the recipient's user ID
-      final recipientSnapshot = await FirebaseFirestore.instance
-          .collection('registered_users')
-          .get();
-
-      final recipientDoc = recipientSnapshot.docs.firstWhere(
-        (doc) {
-          final storedPhone = doc['phoneNumber'];
-          return contact.phones.any((phone) => arePhoneNumbersEqual(phone.number, storedPhone));
-        },
-        orElse: () => throw Exception('Recipient user not found'),
-      );
-
-      final recipientUserId = recipientDoc.id;
-
-      // Check for existing friend request
-      final existingRequestSnapshot = await FirebaseFirestore.instance
-          .collection('friend_requests')
-          .where('senderId', isEqualTo: currentUser.uid)
-          .where('recipientId', isEqualTo: recipientUserId)
-          .where('status', isEqualTo: 'pending')
-          .get();
-
-      if (existingRequestSnapshot.docs.isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Friend request already sent to ${contact.displayName}")),
-        );
-        return;
-      }
-
-      // If no existing request, create a new friend request document
-      await FirebaseFirestore.instance.collection('friend_requests').add({
-        'senderId': currentUser.uid,
-        'senderPhone': currentUser.phoneNumber,
-        'senderName': currentUser.displayName ?? 'Unknown',
-        'recipientId': recipientUserId,
-        'recipientPhone': contact.phones.first.number,
-        'recipientName': contact.displayName,
-        'status': 'pending',
-        'timestamp': FieldValue.serverTimestamp(),
-      });
-
-      setState(() {
-        sentFriendRequests[contact.id] = true;
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Friend request sent to ${contact.displayName}")),
-      );
-    } catch (e) {
-      print('Error sending friend request: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed to send friend request: ${e.toString()}")),
-      );
-    }
   }
 
   Future<void> _addPost(BuildContext context, String username, String content) async {
@@ -842,9 +778,6 @@ class _HomePageState extends State<HomePage> {
           await prefs.setString('user_phone', userPhone!);
         }
       }
-
-      print('User Name: $userName');
-      print('User Phone: $userPhone');
 
       // Get user initials from user name
       final initials = userName != null && userName.isNotEmpty
@@ -1030,171 +963,251 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  Widget _buildFriendRequestCard(Map<String, dynamic> request) {
-    print("Friend request data: in card");
-    print(request);
-    String senderName = request['senderName'] ?? 'Unknown';
-    String senderPhone = request['senderPhone'] ?? '';
+  Future<void> _loadRegisteredContacts() async {
+    setState(() => _isRegisteredContactsLoading = true);
+    try {
+      final registeredUsers = await FirebaseFirestore.instance
+          .collection('registered_users')
+          .get();
+      
+      // Filter contacts to only include those registered in the app
+      registeredContacts = contacts.where((contact) {
+        return contact.phones.any((phone) {
+          return registeredUsers.docs.any((userDoc) {
+            String userPhone = userDoc.data()['phoneNumber'] ?? '';
+            return arePhoneNumbersEqual(phone.number, userPhone);
+          });
+        });
+      }).toList();
 
-    print("Total contacts: ${contacts.length}");
-
-    int contactsChecked = 0;
-    bool found = false;
-    for (var contact in contacts) {
-      contactsChecked++;
-      print("Checking contact $contactsChecked: ${contact.displayName} ${contact.phones}");
-      if (contact.phones.isNotEmpty) {
-        for (var phone in contact.phones) {
-         //check if phone number is equal to sender phone number
-           String cleanPhone1 = senderPhone.replaceAll(RegExp(r'\D'), '');
-    String cleanPhone2 = phone.number.replaceAll(RegExp(r'\D'), '');
-    print("Comparing $cleanPhone1 and $cleanPhone2");
-    print("Clean numbers: $cleanPhone1 and $cleanPhone2");
-    if (cleanPhone1 == cleanPhone2) {
-      senderName = contact.displayName;
-      found = true;
-      break;
-    }
-      //if clean phone1 or clean phone2 length is 12 , find which one is 12, remove first 2 dight from that
-      if (cleanPhone1.length == 12) {
-        cleanPhone1 = cleanPhone1.substring(2);
+      if (mounted) {
+        setState(() {
+          _isRegisteredContactsLoading = false;
+        });
       }
-      if (cleanPhone2.length == 12) {
-        cleanPhone2 = cleanPhone2.substring(2);
-      }
-      if (cleanPhone1 == cleanPhone2) {
-        senderName = contact.displayName;
-        found = true;
-        break;
-      }
-        }
-        if (found) break;
-
+    } catch (e) {
+      print('Error loading registered contacts: $e');
+      if (mounted) {
+        setState(() => _isRegisteredContactsLoading = false);
       }
     }
+  }
 
-    print("Contacts checked: $contactsChecked");
+  void _showFilterDialog(BuildContext context) {
+    String location = '';
+    String title = '';
+    String company = '';
 
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '$senderName wants to be your friend',
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              request['senderPhone'],
-              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => _respondToFriendRequest(request, 'rejected'),
-                  child: const Text('Reject'),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: () => _respondToFriendRequest(request, 'accepted'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFF4845F),
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setState) {
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.85,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+              ),
+              child: Column(
+                children: [
+                  // Handle bar
+                  Container(
+                    margin: const EdgeInsets.only(top: 12),
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[300],
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
-                  child: Text('Accept',style: TextStyle(color: Colors.white)),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
+                  
+                  // Header
+                  Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Filter Contacts',
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Filter Fields
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildFilterSection(
+                            'Location',
+                            'Search by location',
+                            Icons.location_on_outlined,
+                            (value) => setState(() => location = value),
+                          ),
+                          const SizedBox(height: 24),
+                          _buildFilterSection(
+                            'Job Title',
+                            'Search by job title',
+                            Icons.work_outline,
+                            (value) => setState(() => title = value),
+                          ),
+                          const SizedBox(height: 24),
+                          _buildFilterSection(
+                            'Company',
+                            'Search by company name',
+                            Icons.business_outlined,
+                            (value) => setState(() => company = value),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // Action Buttons
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.grey.withOpacity(0.1),
+                          spreadRadius: 1,
+                          blurRadius: 10,
+                          offset: const Offset(0, -5),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              _performSearch('');
+                            },
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              side: const BorderSide(color: Color(0xFFF4845F)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: const Text(
+                              'Clear All',
+                              style: TextStyle(color: Color(0xFFF4845F)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              _applyFilters(location, title, company);
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFF4845F),
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: const Text(
+                              'Apply Filters',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
-  Future<void> _respondToFriendRequest(Map<String, dynamic> request, String status) async {
-    try {
-      final requestDoc = await FirebaseFirestore.instance
-          .collection('friend_requests')
-          .where('senderId', isEqualTo: request['senderId'])
-          .where('recipientId', isEqualTo: request['recipientId'])
-          .where('status', isEqualTo: 'pending')
-          .get();
-
-      if (requestDoc.docs.isNotEmpty) {
-        await requestDoc.docs.first.reference.update({'status': status});
-
-        if (status == 'accepted') {
-          print("Adding friend ${request['senderId']} and ${request['recipientId']}");
-          // Add users to each other's friends list
-          await _addFriend(request['senderId'], request['recipientId']);
-        }
-
-        setState(() {
-          friendRequests.removeWhere((r) => 
-            r['senderId'] == request['senderId'] && 
-            r['recipientId'] == request['recipientId']
-          );
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Friend request ${status == 'accepted' ? 'accepted' : 'rejected'}")),
-        );
-      }
-    } catch (e) {
-      print('Error responding to friend request: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed to respond to friend request: ${e.toString()}")),
-      );
-    }
+  Widget _buildFilterSection(
+    String label,
+    String hint,
+    IconData icon,
+    Function(String) onChanged,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF2D3142),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.grey[50],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey[200]!),
+          ),
+          child: TextField(
+            onChanged: onChanged,
+            decoration: InputDecoration(
+              hintText: hint,
+              hintStyle: TextStyle(color: Colors.grey[400]),
+              prefixIcon: Icon(icon, color: Colors.grey[400]),
+              border: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 16,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
-  Future<void> _addFriend(String userId1, String userId2) async {
-    final batch = FirebaseFirestore.instance.batch();
-    print('Adding friend $userId1 and $userId2');
-
-    // Reference to the 'Network' collection
-    final networkCollection = FirebaseFirestore.instance.collection('Network');
-
-    // Check if the 'Network' collection exists, if not, create it
-    final networkCollectionExists = await networkCollection.limit(1).get();
-    if (networkCollectionExists.docs.isEmpty) {
-      // If the collection doesn't exist, create it by adding a dummy document
-      await networkCollection.add({'dummy': true});
-      // Then delete the dummy document
-      await networkCollection.where('dummy', isEqualTo: true).get().then((snapshot) {
-        for (DocumentSnapshot doc in snapshot.docs) {
-          doc.reference.delete();
-        }
-      });
+  void _applyFilters(String location, String title, String company) {
+    // Build filter query in a consistent format
+    List<String> filterTerms = [];
+    
+    if (location.isNotEmpty) filterTerms.add('location:$location');
+    if (title.isNotEmpty) filterTerms.add('title:$title');
+    if (company.isNotEmpty) filterTerms.add('company:$company');
+    
+    // If no filters are set, clear the search
+    if (filterTerms.isEmpty) {
+      _performSearch('');
+      return;
     }
-
-    final user1Ref = networkCollection.doc(userId1);
-    final user2Ref = networkCollection.doc(userId2);
-
-    // Check if documents exist and create them if they don't
-    final user1Doc = await user1Ref.get();
-    final user2Doc = await user2Ref.get();
-
-    if (!user1Doc.exists) {
-      batch.set(user1Ref, {'friends': []});
-    }
-    if (!user2Doc.exists) {
-      batch.set(user2Ref, {'friends': []});
-    }
-
-    // Now update the friends arrays
-    batch.update(user1Ref, {
-      'friends': FieldValue.arrayUnion([userId2])
+    
+    // Join all filter terms with spaces to create a single search query
+    String combinedQuery = filterTerms.join(' ');
+    
+    // Update the search controller text and perform search
+    setState(() {
+      _searchController.text = combinedQuery;
+      _performSearch(combinedQuery);
     });
-
-    batch.update(user2Ref, {
-      'friends': FieldValue.arrayUnion([userId1])
-    });
-
-    await batch.commit();
   }
 }

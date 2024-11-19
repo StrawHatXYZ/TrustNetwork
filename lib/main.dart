@@ -5,21 +5,13 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:trust/contacts_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  
-  // Request contacts permission
-  if (await Permission.contacts.isGranted) {
-    // Access contacts
-  } else {
-    // Handle permission denied
-    await Permission.contacts.request();
-  }
-  
   runApp(const MyApp());
 }
 

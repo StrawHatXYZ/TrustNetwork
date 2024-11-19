@@ -7,6 +7,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'home.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
+import 'contacts_service.dart';
 
 class PhoneLoginScreen extends StatefulWidget {
   const PhoneLoginScreen({super.key});
@@ -562,7 +564,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
         throw Exception('No authenticated user found');
       }
 
-      // For existing users, require explicit continue action
+      // For existing users, handle differently
       if (_nameExists) {
         await _storeUserDataLocally(_phoneController.text, _nameController.text);
         
@@ -574,7 +576,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
         return;
       }
 
-      // For new users, validate name input
+      // Validate name input
       if (_nameController.text.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Please enter your name')),
@@ -585,10 +587,11 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
         return;
       }
 
-      // Store data and navigate only after successful save
+      // Store user data
       await _storeUserData(user.uid, _phoneController.text, _nameController.text);
       await _storeUserDataLocally(_phoneController.text, _nameController.text);
       
+      // Navigate to home page
       if (context.mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (context) => const HomePage()),

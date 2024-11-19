@@ -1,8 +1,11 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class FriendService {
+
+
   static Future<List<Contact>> getFriendContacts() async {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) {
@@ -20,6 +23,8 @@ class FriendService {
     }
 
     final friendIds = List<String>.from(networkDoc.data()?['friends'] ?? []);
+   
+    // print(friendIds);
 
     // Get the registered users' data
     final registeredUsersSnapshot = await FirebaseFirestore.instance
@@ -48,6 +53,8 @@ class FriendService {
         ),
       );
 
+      // print(matchingContact);
+
       friendContacts.add(matchingContact);
     }
 
@@ -65,5 +72,46 @@ class FriendService {
     }
 
     return cleanPhone1 == cleanPhone2;
+  }
+
+  Future<List<String>> getFriends(String userId) async {
+    try {
+      print('Getting friends for user: $userId');
+      final snapshot = await FirebaseFirestore.instance
+          .collection('friends')
+          .doc(userId)
+          .get();
+      
+      if (!snapshot.exists) {
+        print('No friends document found for user: $userId');
+        return [];
+      }
+      
+      final data = snapshot.data();
+      if (data == null) {
+        print('Friends document exists but has no data');
+        return [];
+      }
+      
+      final List<String> friends = List<String>.from(data['friends'] ?? []);
+      print('Found ${friends.length} friends: $friends');
+      return friends;
+    } catch (e) {
+      print('Error getting friends: $e');
+      return [];
+    }
+  }
+
+  static Future<void> makePhoneCall(String phoneNumber) async {
+    final Uri uri = Uri(
+      scheme: 'tel',
+      path: phoneNumber.replaceAll(RegExp(r'[^\d+]'), ''),
+    );
+    
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    } else {
+      throw 'Could not launch $uri';
+    }
   }
 }
