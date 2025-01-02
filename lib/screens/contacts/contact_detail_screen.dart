@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:flutter/cupertino.dart';
-import 'package:trust/contacts_service.dart';
 import 'dart:typed_data';
+import '../../services/contacts_service.dart';
 
 class ContactDetailScreen extends StatefulWidget {
   final Contact contact;
@@ -38,8 +38,13 @@ class _ContactDetailScreenState extends State<ContactDetailScreen> {
     super.initState();
     _firstNameController = TextEditingController(text: widget.contact.name.first);
     _lastNameController = TextEditingController(text: widget.contact.name.last);
-    _companyController = TextEditingController(text: widget.contact.organizations.isNotEmpty ? widget.contact.organizations.first.company : '');
-    _titleController = TextEditingController(text: widget.contact.organizations.isNotEmpty ? widget.contact.organizations.first.title : '');
+    final organization = widget.contact.organizations.isNotEmpty ? widget.contact.organizations.first : null;
+    _companyController = TextEditingController(
+      text: organization?.company ?? ''
+    );
+    _titleController = TextEditingController(
+      text: organization?.title ?? ''
+    );
     _phoneControllers = widget.contact.phones.map((phone) => TextEditingController(text: phone.number)).toList();
     if (_phoneControllers.isEmpty) _phoneControllers.add(TextEditingController());
     _emailControllers = widget.contact.emails.map((email) => TextEditingController(text: email.address)).toList();
@@ -362,68 +367,54 @@ class _ContactDetailScreenState extends State<ContactDetailScreen> {
     // You may want to use a MultiSelectChip or CheckboxListTile for this
     return Container(); // Placeholder
   }
-
   void _saveContact() async {
-    // Update the contact object with new values
-    widget.contact.name.first = _firstNameController.text;
-    widget.contact.name.last = _lastNameController.text;
-    // Update the displayName
-    widget.contact.displayName = '${_firstNameController.text} ${_lastNameController.text}'.trim();
-    widget.contact.organizations = [Organization(company: _companyController.text, title: _titleController.text)];
-    widget.contact.phones = _phoneControllers
-        .where((controller) => controller.text.isNotEmpty)
-        .map((controller) => Phone(controller.text))
-        .toList();
-    widget.contact.emails = _emailControllers
-        .where((controller) => controller.text.isNotEmpty)
-        .map((controller) => Email(controller.text))
-        .toList();
-    widget.contact.addresses = _addressControllers
-        .where((controller) => controller.text.isNotEmpty)
-        .map((controller) => Address(controller.text))
-        .toList();
-    widget.contact.websites = _websiteControllers
-        .where((controller) => controller.text.isNotEmpty)
-        .map((controller) => Website(controller.text))
-        .toList();
-    widget.contact.socialMedias = _socialMediaControllers
-        .where((controller) => controller.text.isNotEmpty)
-        .map((controller) => SocialMedia(controller.text))
-        .toList();
-    widget.contact.events = _eventControllers
-        .where((controller) => controller.text.isNotEmpty)
-        .map((controller) {
-          final parts = controller.text.split('-');
-          return Event(
-            year: int.parse(parts[0]),
-            month: int.parse(parts[1]),
-            day: int.parse(parts[2])
-          );
-        })
-        .toList();
-    widget.contact.notes = [Note(_noteController.text)];
-    widget.contact.groups = _selectedGroups.map((groupId) => Group(groupId, '')).toList();
-    widget.contact.photo = _photo;
-
     try {
-      // Update the contact in local storage
-      await ContactService.updateContact(widget.contact);
+      // Update basic info
+      widget.contact.name.first = _firstNameController.text;
+      widget.contact.name.last = _lastNameController.text;
+      widget.contact.displayName = '${_firstNameController.text} ${_lastNameController.text}'.trim();
       
-      // Call the onContactUpdated callback
+      // Only update organization if the fields have actually changed
+      if (widget.contact.organizations.isEmpty && (_companyController.text.isNotEmpty || _titleController.text.isNotEmpty)) {
+        // Create new organization
+        widget.contact.organizations = [
+          Organization(company: _companyController.text, title: _titleController.text)
+        ];
+      } else if (widget.contact.organizations.isNotEmpty) {
+        // Update existing organization
+        final org = widget.contact.organizations.first;
+        if (_companyController.text != org.company || _titleController.text != org.title) {
+          widget.contact.organizations = [
+            Organization(company: _companyController.text, title: _titleController.text)
+          ];
+        }
+      }
+      
+      // Update addresses
+      if (_addressControllers.any((controller) => controller.text.isNotEmpty)) {
+        widget.contact.addresses = _addressControllers
+            .where((controller) => controller.text.isNotEmpty)
+            .map((controller) => Address(controller.text, label: AddressLabel.home, street: controller.text))
+            .toList();
+      }
+      
+      // Save the contact
+      await ContactService.updateContact(widget.contact);
       widget.onContactUpdated(widget.contact);
-
-      // Show success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Contact updated successfully')),
-      );
-
-      // Close the edit screen
-      Navigator.of(context).pop();
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Contact updated successfully')),
+        );
+        Navigator.of(context).pop();
+      }
     } catch (e) {
-      // Show error message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to update contact: $e')),
-      );
+      print('Error saving contact: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update contact: $e')),
+        );
+      }
     }
   }
 

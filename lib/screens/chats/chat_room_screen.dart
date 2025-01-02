@@ -4,8 +4,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart'; // Add this import for date formatting
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 
-  
 
 class ChatRoomScreen extends StatefulWidget {
   final String roomId;
@@ -28,6 +28,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   String _currentUserName = 'Unknown User';
   String _participantPhoneNumber = '';
   final List<Map<String, dynamic>> _pendingMessages = [];
+  bool _showEmoji = false;
 
   @override
   void initState() {
@@ -179,10 +180,10 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
         title: Row(
           children: [
             CircleAvatar(
-              backgroundColor: Colors.blue.shade100,
-              child: Text(
+              backgroundColor: Color(0xFFF4845F),
+              child:  Text(
                 widget.contactName[0].toUpperCase(),
-                style: TextStyle(color: Colors.blue.shade700),
+                style: TextStyle(color: Colors.white),
               ),
               radius: 18,
             ),
@@ -455,6 +456,17 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  IconButton(
+                    icon: Icon(Icons.emoji_emotions_outlined),
+                    onPressed: () {
+                      setState(() {
+                        _showEmoji = !_showEmoji;
+                      });
+                      if (_showEmoji) {
+                        FocusScope.of(context).unfocus();
+                      }
+                    },
+                  ),
                   Expanded(
                     child: RawKeyboardListener(
                       focusNode: _focusNode,
@@ -501,6 +513,17 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
                 ],
               ),
             ),
+            if (_showEmoji)
+              SizedBox(
+                height: 250,
+                child: EmojiPicker(
+                  onEmojiSelected: (category, emoji) {
+                    setState(() {
+                      _messageController.text = _messageController.text + emoji.emoji;
+                    });
+                  },
+                ),
+              ),
           ],
         ),
       ),

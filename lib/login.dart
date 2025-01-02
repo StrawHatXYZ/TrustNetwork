@@ -5,10 +5,10 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:trust/screens/home/home_screen.dart';
+import 'package:provider/provider.dart';
+import 'providers/user_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'home.dart';
-import 'package:flutter_contacts/flutter_contacts.dart';
-import 'contacts_service.dart';
 
 class PhoneLoginScreen extends StatefulWidget {
   const PhoneLoginScreen({super.key});
@@ -569,6 +569,8 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
         await _storeUserDataLocally(_phoneController.text, _nameController.text);
         
         if (context.mounted) {
+          await context.read<UserProvider>().loadUserData();
+          
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (context) => const HomePage()),
           );
@@ -591,8 +593,10 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
       await _storeUserData(user.uid, _phoneController.text, _nameController.text);
       await _storeUserDataLocally(_phoneController.text, _nameController.text);
       
-      // Navigate to home page
+      // Initialize UserProvider
       if (context.mounted) {
+        await context.read<UserProvider>().loadUserData();
+        
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (context) => const HomePage()),
         );

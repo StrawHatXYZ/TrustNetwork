@@ -11,11 +11,11 @@ class ChatListScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final currentUser = FirebaseAuth.instance.currentUser;
 
-    if (currentUser == null) {
-      return const Center(child: Text('Please log in to view chats'));
-    }
-
-    return StreamBuilder<QuerySnapshot>(
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F6FA),
+      body: currentUser == null
+          ? const Center(child: Text('Please log in to view chats'))
+          : StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('chat_rooms')
           .where('participants', arrayContains: currentUser.uid)
@@ -43,8 +43,9 @@ class ChatListScreen extends StatelessWidget {
               return _buildOneOnOneChatTile(context, chatRoom, currentUser!.uid);
             }
           },
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -67,18 +68,49 @@ class ChatListScreen extends StatelessWidget {
             .join(', ');
 
         return ListTile(
+          contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           leading: CircleAvatar(
-            backgroundColor: Colors.blue,
-            child: Icon(Icons.group, color: Colors.white),
+            radius: 28,
+            backgroundColor: Colors.orange.shade100,
+            child: Icon(
+              Icons.group,
+              color: Colors.orange.shade700,
+              size: 24,
+            ),
           ),
-          title: Text('Group Chat'),
-          subtitle: Text(memberNames),
-          trailing: chatRoom['lastMessageTimestamp'] != null
-              ? Text(
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Group Chat',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+              if (chatRoom['lastMessageTimestamp'] != null)
+                Text(
                   _formatTimestamp(chatRoom['lastMessageTimestamp'] as Timestamp),
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                )
-              : null,
+                  style: TextStyle(
+                    color: Colors.grey[600],
+                    fontSize: 12,
+                  ),
+                ),
+            ],
+          ),
+          subtitle: Padding(
+            padding: EdgeInsets.only(top: 4),
+            child: Text(
+              memberNames,
+              style: TextStyle(
+                color: Colors.grey[600],
+                fontSize: 14,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
           onTap: () {
             Navigator.push(
               context,
@@ -113,30 +145,80 @@ class ChatListScreen extends StatelessWidget {
         final otherUserData = userSnapshot.data!.data() as Map<String, dynamic>?;
         final otherUserName = otherUserData?['name'] ?? 'Unknown User';
 
-        return ListTile(
-          leading: CircleAvatar(
-            child: Text(otherUserName[0]),
+        return Container(
+          margin: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.grey.withOpacity(0.1),
+                spreadRadius: 1,
+                blurRadius: 3,
+                offset: Offset(0, 1),
+              ),
+            ],
           ),
-          title: Text(otherUserName),
-          subtitle: Text(chatRoom['lastMessage'] ?? 'No messages yet'),
-          trailing: chatRoom['lastMessageTimestamp'] != null
-              ? Text(
-                  _formatTimestamp(chatRoom['lastMessageTimestamp'] as Timestamp),
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                )
-              : null,
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => ChatRoomScreen(
-                  roomId: chatRoom.id,
-                  contactName: otherUserName,
-                  participantNames: otherUserName,
+          child: ListTile(
+            contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            leading: CircleAvatar(
+              radius: 28,
+              backgroundColor: const Color(0xFFF4845F),
+              child: Text(
+                otherUserName[0].toUpperCase(),
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
                 ),
               ),
-            );
-          },
+            ),
+            title: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    otherUserName,
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                if (chatRoom['lastMessageTimestamp'] != null)
+                  Text(
+                    _formatTimestamp(chatRoom['lastMessageTimestamp'] as Timestamp),
+                    style: TextStyle(
+                      color: Colors.grey[600],
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
+            ),
+            subtitle: Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text(
+                chatRoom['lastMessage'] ?? 'No messages yet',
+                style: TextStyle(
+                  color: Colors.grey[600],
+                  fontSize: 14,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ChatRoomScreen(
+                    roomId: chatRoom.id,
+                    contactName: otherUserName,
+                    participantNames: otherUserName,
+                  ),
+                ),
+              );
+            },
+          ),
         );
       },
     );

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
-import '../contact_detail_screen.dart';
+import 'contact_detail_screen.dart';
 
 class ContactViewScreen extends StatelessWidget {
   final Contact contact;
@@ -14,6 +14,8 @@ class ContactViewScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    print("Contact View Screen");
+    print(contact);
     return Scaffold(
       appBar: AppBar(
         title: Text(contact.displayName),

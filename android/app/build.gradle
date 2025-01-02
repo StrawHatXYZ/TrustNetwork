@@ -24,10 +24,11 @@ android {
         applicationId = "com.example.contacts"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 23
-        targetSdk = flutter.targetSdkVersion
+        minSdkVersion 23  // Minimum supported Android version (Android 5.0)
+        targetSdkVersion 34 // Latest stable Android version
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        multiDexEnabled true // Enable multidex support
     }
 
     buildTypes {
@@ -35,6 +36,9 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.debug
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
 }
